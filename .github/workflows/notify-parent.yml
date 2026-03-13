@@ -2,7 +2,7 @@ name: Notify Parent of Update
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, auto-updater ]
 
 jobs:
   dispatch:
