@@ -1,0 +1,42 @@
+name: Notify Parent of Update
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for new transforms
+        id: check_changes
+        run: |
+            # Get all added files (.ctl or .cpp)
+            NEW_FILES=$(git diff-tree --no-commit-id --name-status -r ${{ github.sha }} | grep '^A' | awk '{print $2}' | grep -E '\.(ctl|cpp)$')
+
+            # Create a JSON array of metadata
+            TRANSFORMS_JSON=$(echo "$NEW_FILES" | jq -R -s -c 'split("\n") | map(select(length > 0) | {
+            file: .,
+            id: (input_filename = . | sed -n "s/.*<ACEStransformID>\(.*\)<\/ACEStransformID>.*/\1/p" < .),
+            user: (input_filename = . | sed -n "s/.*<ACESuserName>\(.*\)<\/ACESuserName>.*/\1/p" < .)
+            })')
+
+            # Send this array in the dispatch
+            # (Use the same peter-evans/repository-dispatch action as before)
+            # client-payload: '{"submodule": "...", "sha": "...", "new_transforms": '"$TRANSFORMS_JSON"'}'
+
+      - name: Repository Dispatch
+        if: steps.check_changes.outputs.NEW_TRANSFORM_FOUND == 'true'
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PARENT_REPO_PAT }} # Needs 'repo' scope
+          repository: scottdyer/aces # Path to your parent repo
+          event-type: submodule_update
+          client-payload: |
+            {
+                "submodule": "aces-input-and-colorspaces",
+                "sha": "${{ github.sha }}",
+                "transformId": "${{ steps.check_changes.outputs.TRANSFORM_ID }}",
+                "userName": "${{ steps.check_changes.outputs.USER_NAME }}",
+                "transformUrl": "https://github.com/your-org/aces-input-and-colorspaces/blob/${{ github.sha }}/${{ steps.check_changes.outputs.FILE_PATH }}"
+            }
