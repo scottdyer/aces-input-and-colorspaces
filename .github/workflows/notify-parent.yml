@@ -16,20 +16,14 @@ jobs:
       - name: Check for new transforms
         id: check_changes
         run: |
-          # 1. Identify added files (added '|| true' to prevent crash if no files found)
-          NEW_FILES=$(git diff-tree --no-commit-id --name-status -r ${{ github.sha }} | grep '^A' | awk '{print $2}' | grep -E '\.(ctl|cpp)$' || true)
+          # 1. Identify added files
+          NEW_FILES=$(git diff-tree --no-commit-id --name-status -r ${{ github.sha }} | grep '^A' | awk '{print $2}' | grep -E '\.(ctl)$' || true)
 
-          if [ -z "$NEW_FILES" ]; then
-            echo "FOUND=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # 2. Build the JSON array manually using a loop
-          # We'll use a temporary file to keep things clean
-          echo "[" > transforms.json
+          # 2. Build the JSON array (will be [] if empty)
+          echo "[" > payload.json
           FIRST=true
           for FILE in $NEW_FILES; do
-            if [ "$FIRST" = false ]; then echo "," >> transforms.json; fi
+            if [ "$FIRST" = false ]; then echo "," >> payload.json; fi
             
             # Extract tags using sed
             T_ID=$(sed -n 's/.*<ACEStransformID>\(.*\)<\/ACEStransformID>.*/\1/p' "$FILE")
@@ -39,13 +33,16 @@ jobs:
             T_ID=${T_ID:-"unknown_id"}
             U_NAME=${U_NAME:-"$FILE"}
 
-            echo "{\"file\": \"$FILE\", \"id\": \"$T_ID\", \"user\": \"$U_NAME\"}" >> transforms.json
+            # Debug line - REMOVE
+            echo "{\"file\": \"$FILE\", \"id\": \"$T_ID\", \"user\": \"$U_NAME\"}"
+            
+            echo "{\"file\": \"$FILE\", \"id\": \"$T_ID\", \"user\": \"$U_NAME\"}" >> payload.json
             FIRST=false
           done
-          echo "]" >> transforms.json
+          echo "]" >> payload.json
 
           # 3. Export as a single line for the dispatch
-          echo "TRANSFORMS_DATA=$(cat transforms.json | jq -c .)" >> $GITHUB_OUTPUT
+          echo "TRANSFORMS_DATA=$(cat payload.json | jq -c .)" >> $GITHUB_OUTPUT
           echo "FOUND=true" >> $GITHUB_OUTPUT
 
       - name: Repository Dispatch
