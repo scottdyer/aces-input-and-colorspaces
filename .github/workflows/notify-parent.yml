@@ -8,35 +8,56 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
       - name: Check for new transforms
         id: check_changes
         run: |
-            # Get all added files (.ctl or .cpp)
-            NEW_FILES=$(git diff-tree --no-commit-id --name-status -r ${{ github.sha }} | grep '^A' | awk '{print $2}' | grep -E '\.(ctl|cpp)$')
+          # 1. Identify added files (added '|| true' to prevent crash if no files found)
+          NEW_FILES=$(git diff-tree --no-commit-id --name-status -r ${{ github.sha }} | grep '^A' | awk '{print $2}' | grep -E '\.(ctl|cpp)$' || true)
 
-            # Create a JSON array of metadata
-            TRANSFORMS_JSON=$(echo "$NEW_FILES" | jq -R -s -c 'split("\n") | map(select(length > 0) | {
-            file: .,
-            id: (input_filename = . | sed -n "s/.*<ACEStransformID>\(.*\)<\/ACEStransformID>.*/\1/p" < .),
-            user: (input_filename = . | sed -n "s/.*<ACESuserName>\(.*\)<\/ACESuserName>.*/\1/p" < .)
-            })')
+          if [ -z "$NEW_FILES" ]; then
+            echo "FOUND=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-            # Send this array in the dispatch
-            # (Use the same peter-evans/repository-dispatch action as before)
-            # client-payload: '{"submodule": "...", "sha": "...", "new_transforms": '"$TRANSFORMS_JSON"'}'
+          # 2. Build the JSON array manually using a loop
+          # We'll use a temporary file to keep things clean
+          echo "[" > transforms.json
+          FIRST=true
+          for FILE in $NEW_FILES; do
+            if [ "$FIRST" = false ]; then echo "," >> transforms.json; fi
+            
+            # Extract tags using sed
+            T_ID=$(sed -n 's/.*<ACEStransformID>\(.*\)<\/ACEStransformID>.*/\1/p' "$FILE")
+            U_NAME=$(sed -n 's/.*<ACESuserName>\(.*\)<\/ACESuserName>.*/\1/p' "$FILE")
+            
+            # If tags are missing, use filename as fallback
+            T_ID=${T_ID:-"unknown_id"}
+            U_NAME=${U_NAME:-"$FILE"}
+
+            echo "{\"file\": \"$FILE\", \"id\": \"$T_ID\", \"user\": \"$U_NAME\"}" >> transforms.json
+            FIRST=false
+          done
+          echo "]" >> transforms.json
+
+          # 3. Export as a single line for the dispatch
+          echo "TRANSFORMS_DATA=$(cat transforms.json | jq -c .)" >> $GITHUB_OUTPUT
+          echo "FOUND=true" >> $GITHUB_OUTPUT
 
       - name: Repository Dispatch
-        if: steps.check_changes.outputs.NEW_TRANSFORM_FOUND == 'true'
+        if: steps.check_changes.outputs.FOUND == 'true'
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.PARENT_REPO_PAT }} # Needs 'repo' scope
-          repository: scottdyer/aces # Path to your parent repo
+          token: ${{ secrets.PARENT_REPO_PAT }}
+          repository: scottdyer/aces
           event-type: submodule_update
           client-payload: |
             {
-                "submodule": "aces-input-and-colorspaces",
-                "sha": "${{ github.sha }}",
-                "transformId": "${{ steps.check_changes.outputs.TRANSFORM_ID }}",
-                "userName": "${{ steps.check_changes.outputs.USER_NAME }}",
-                "transformUrl": "https://github.com/your-org/aces-input-and-colorspaces/blob/${{ github.sha }}/${{ steps.check_changes.outputs.FILE_PATH }}"
+              "submodule": "aces-input-and-colorspaces",
+              "sha": "${{ github.sha }}",
+              "new_transforms": ${{ steps.check_changes.outputs.TRANSFORMS_DATA }}
             }
